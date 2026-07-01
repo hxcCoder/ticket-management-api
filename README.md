@@ -6,6 +6,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-4169E1?style=flat-square&logo=postgresql&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)
 ![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen)
+
 API REST para la gestión de tickets de soporte, construida con Node.js, Express, TypeScript y Prisma. Incluye autenticación JWT, control de acceso por roles, validación de datos con Zod y manejo centralizado de errores.
 
 Proyecto personal, pensado como ejercicio de arquitectura en capas (controllers, services, middlewares) y testing automatizado con Jest.
