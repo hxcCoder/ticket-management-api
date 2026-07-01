@@ -1,0 +1,54 @@
+{
+"compilerOptions": {
+   /* ==========================================
+      1. ENTORNO Y MÓDULOS
+       ========================================== */
+    "target": "ES2022",                                  /* Usa características modernas de JS soportadas por Node 18+ */
+    "module": "CommonJS",                                /* Estándar para Express y Jest (aunque uses import/export en TS) */
+    /* Estrategia de resolución de Node.js */
+   
+   /* ==========================================
+      2. RUTAS Y COMPILACIÓN
+       ========================================== */
+    "outDir": "./dist",                                  /* Dónde se guardará el código JavaScript compilado */
+    "rootDir": "./",                                     /* Mantiene la estructura de carpetas original en el dist */
+    "removeComments": true,                              /* Limpia los comentarios en producción para un código más ligero */
+   
+   /* ==========================================
+      3. REGLAS ESTRICTAS (Lo que miran los Seniors)
+       ========================================== */
+    "strict": true,                                      /* Activa todas las comprobaciones estrictas de TS */
+    "noImplicitAny": true,                               /* Prohíbe variables tipo 'any' sin declarar explícitamente */
+    "strictNullChecks": true,                            /* Evita los clásicos errores de "Cannot read property of null/undefined" */
+    "noUnusedLocals": true,                              /* Falla si declaras una variable y nunca la usas */
+    "noUnusedParameters": true,                          /* Falla si recibes un parámetro en una función y no lo usas */
+    "noImplicitReturns": true,                           /* Obliga a que todos los caminos de una función retornen algo */
+   
+   /* ==========================================
+      4. TIPOS Y GLOBALES
+       ========================================== */
+    "typeRoots": ["./node_modules/@types", "./src/types"], /* Le dice a TS dónde buscar tus tipos personalizados (como index.d.ts) */
+    "types": ["node", "jest"],                           /* Carga los tipos globales para process.env y las funciones de Jest (describe, it) */
+   
+   /* ==========================================
+      5. INTEROPERABILIDAD Y OPTIMIZACIÓN
+       ========================================== */
+    "esModuleInterop": true,                             /* Permite importar módulos antiguos de CommonJS como si fueran ES Modules */
+    "forceConsistentCasingInFileNames": true,            /* Evita errores entre Windows (no case-sensitive) y Linux (case-sensitive) */
+    "skipLibCheck": true                                 /* Acelera la compilación ignorando errores de tipos en librerías de node_modules */
+},
+
+/* ==========================================
+   6. QUÉ ARCHIVOS INCLUIR/EXCLUIR
+     ========================================== */
+"include": [
+      "src/**/*",
+      "__tests__/**/*",
+      "src/types/**/*.d.ts",
+      "__mocks__/**/*"
+],
+"exclude": [
+      "node_modules",
+      "dist"
+  ]
+}

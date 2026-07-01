@@ -1,0 +1,776 @@
+<repository>
+
+<directory_tree>
+├── __tests__
+│   └── app.test.ts
+├── app.ts
+├── config
+│   └── prisma.ts
+├── configs
+├── controllers
+│   └── ticket.controller.ts
+├── middleware
+│   ├── authMiddleware.ts
+│   ├── errorHandler.ts
+│   └── validateRequest.ts
+├── routes
+│   ├── __tests__
+│   │   └── ticket.routes.test.ts
+│   └── ticket.routes.ts
+├── schemas
+│   └── ticket.schema.ts
+├── server.ts
+├── services
+│   ├── __tests__
+│   │   └── ticket.service.test.ts
+│   └── ticket.service.ts
+└── types
+    └── express
+        └── index.d.ts
+</directory_tree>
+
+<file path="app.ts">
+import express from &apos;express&apos;;
+import cors from &apos;cors&apos;;
+import helmet from &apos;helmet&apos;;
+import dotenv from &apos;dotenv&apos;;
+
+// 1. Importa tus rutas aquí
+// (Nota: Ajusta el path a &apos;./middleware/ticketRoutes&apos; si decidiste no crear la carpeta &apos;routes&apos;)
+import ticketRoutes from &apos;./routes/ticket.routes&apos;; 
+import { errorHandler, NotFoundError } from &apos;./middleware/errorHandler&apos;;
+
+dotenv.config();
+
+const app = express();
+
+// Middlewares globales de infraestructura
+app.use(helmet());
+app.use(cors());
+app.use(express.json());
+
+// Endpoint de Health Check (esencial para balanceadores de carga)
+app.get(&apos;/health&apos;, (_req, res) =&gt; {
+    res.status(200).json({ 
+        status: &apos;OK&apos;, 
+        timestamp: new Date().toISOString() 
+    });
+});
+
+// ==========================================
+// 2. REGISTRO DE RUTAS DE LA API
+// ==========================================
+app.use(&apos;/api/tickets&apos;, ticketRoutes);
+
+// NUEVO: Capturar cualquier ruta no definida (404) para que pase al errorHandler
+app.use((req, _res, next) =&gt; {
+    next(new NotFoundError(`La ruta ${req.originalUrl} no existe`));
+});
+
+// 3. MANEJADOR DE ERRORES GLOBAL
+// El manejador de errores global SIEMPRE debe registrarse después de todas las rutas
+app.use(errorHandler);
+
+export default app;
+</file>
+
+<file path="config/prisma.ts">
+import { PrismaClient } from &apos;@prisma/client&apos;;
+
+export const prisma = new PrismaClient();
+</file>
+
+<file path="controllers/ticket.controller.ts">
+// src/controllers/ticket.controller.ts
+import { Request, Response, NextFunction } from &apos;express&apos;;
+import { TicketService } from &apos;../services/ticket.service&apos;;
+
+export class TicketController {
+/**
+   * Maneja la petición POST para crear un ticket
+   */
+static async createTicket(req: Request, res: Response, next: NextFunction): Promise&lt;void&gt; {
+    try {
+      // 1. Extraemos el ID del usuario directamente del token (¡NUNCA del body por seguridad!)
+    const authorId = req.user!.id; 
+    
+      // 2. Extraemos los datos del body (que ya vienen limpios y validados por Zod)
+    const { title, description, priority } = req.body;
+
+      // 3. Delegamos la lógica de negocio al Servicio
+    const ticket = await TicketService.createTicket({
+        title,
+        description,
+        priority,
+        authorId,
+    });
+
+      // 4. Retornamos la respuesta con el código HTTP correcto (201 Created)
+    res.status(201).json({
+        status: &apos;success&apos;,
+        data: { ticket },
+    });
+    } catch (error) {
+      // Si algo falla en la base de datos o el servicio, se lo pasamos al manejador global
+        next(error); 
+    }
+    
+}
+static async getTickets(req: Request, res: Response, next: NextFunction): Promise&lt;void&gt; {
+    try {
+      // Extraemos ID y Rol del token de forma segura
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+
+      // Llamamos al servicio pasando la información del usuario
+      const tickets = await TicketService.getTickets(userId, userRole);
+
+      res.status(200).json({
+        status: &apos;success&apos;,
+        results: tickets.length,
+        data: { tickets },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+}
+</file>
+
+<file path="middleware/authMiddleware.ts">
+// src/middlewares/auth.middleware.ts
+
+import { Request, Response, NextFunction } from &apos;express&apos;;
+import jwt from &apos;jsonwebtoken&apos;;
+import { AppError } from &apos;./errorHandler&apos;; // Ajusta la ruta a tu AppError
+import { TokenPayload, Role } from &apos;../types/express/index&apos;; // Ajusta la ruta
+
+/**
+ * Middleware de Autenticación (isAuth)
+ * Verifica que el token exista y sea válido.
+ */
+export const isAuth = (req: Request, _res: Response, next: NextFunction) =&gt; {
+    try {
+    // 1. Extraer el token del header &quot;Authorization: Bearer &lt;token&gt;&quot;
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith(&apos;Bearer &apos;)) {
+        throw new AppError(&apos;No estás autenticado. Por favor, inicia sesión.&apos;, 401);
+    }
+
+    const token = authHeader.split(&apos; &apos;)[1];
+
+    // 2. Verificar el token
+    // Ojo: En producción asegura tener process.env.JWT_SECRET definido
+    const secret = process.env.JWT_SECRET || &apos;super-secret-dev-key&apos;; 
+    const decoded = jwt.verify(token, secret) as TokenPayload;
+
+    // 3. Inyectar el payload en la request para uso futuro
+    req.user = decoded;
+
+    next();
+} catch (error) {
+    if (error instanceof jwt.TokenExpiredError) {
+        return next(new AppError(&apos;Tu sesión ha expirado. Inicia sesión nuevamente.&apos;, 401));
+    }
+    if (error instanceof jwt.JsonWebTokenError) {
+        return next(new AppError(&apos;Token inválido.&apos;, 401));
+    }
+    next(error);
+}
+};
+
+/**
+ * Middleware de Autorización (hasRole)
+ * Verifica que el usuario autenticado tenga los permisos necesarios.
+ * Se debe usar SIEMPRE después de `isAuth`.
+ */
+export const hasRole = (roles: Role[]) =&gt; {
+    return (req: Request, _res: Response, next: NextFunction) =&gt; {
+    // req.user debería existir porque isAuth se ejecuta antes
+    if (!req.user) {
+        return next(new AppError(&apos;No se encontró información del usuario.&apos;, 401));
+    }
+
+    if (!roles.includes(req.user.role)) {
+        return next(new AppError(&apos;No tienes permisos para realizar esta acción.&apos;, 403));
+    }
+
+    next();
+};
+};
+</file>
+
+<file path="middleware/errorHandler.ts">
+import { Request, Response, NextFunction } from &apos;express&apos;;
+import { ZodError } from &apos;zod&apos;;
+
+// 1. Clase base para todos nuestros errores operacionales
+export class AppError extends Error {
+    public readonly statusCode: number;
+
+constructor(message: string, statusCode: number) {
+    super(message);
+    this.statusCode = statusCode;
+    
+    // FIX: Restaura la cadena de prototipos correctamente
+    Object.setPrototypeOf(this, new.target.prototype);
+}
+}
+
+// 2. Errores comunes predefinidos
+export class NotFoundError extends AppError {
+    constructor(message = &apos;Resource not found&apos;) {
+    super(message, 404);
+}
+}
+
+export class BadRequestError extends AppError {
+    constructor(message = &apos;Bad request&apos;) {
+    super(message, 400);
+}
+}
+
+export class UnauthorizedError extends AppError {
+    constructor(message = &apos;Unauthorized&apos;) {
+    super(message, 401);  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message = &apos;Forbidden&apos;) {
+    super(message, 403);
+  }
+}
+
+// 3. Middleware Global
+export const errorHandler = (
+    err: Error,
+    _req: Request,
+    res: Response,
+    _next: NextFunction
+): void =&gt; {
+  // Caso A: Validación de Zod
+if (err instanceof ZodError) {
+    res.status(400).json({
+        status: &apos;error&apos;,
+        message: &apos;Validation failed&apos;,
+      // FIX: Usamos issues y tipamos el parámetro inferido
+        errors: err.issues.map((e) =&gt; ({
+        field: e.path.join(&apos;.&apos;),
+        message: e.message,
+        })),
+    });
+    return;
+}
+
+  // Caso B: Errores controlados
+if (err instanceof AppError) {
+    res.status(err.statusCode).json({
+        status: &apos;error&apos;,
+        message: err.message,
+    });
+    return;
+}
+
+  // Caso C: Errores inesperados
+console.error(&apos; Unexpected Error:&apos;, err);
+
+res.status(500).json({
+    status: &apos;error&apos;,
+    message: process.env.NODE_ENV === &apos;production&apos; 
+        ? &apos;Internal server error&apos; 
+        : err.message,
+    });
+};
+</file>
+
+<file path="middleware/validateRequest.ts">
+// src/middlewares/validateRequest.ts
+import { Request, Response, NextFunction } from &apos;express&apos;;
+import { ZodObject } from &apos;zod&apos;;
+
+export const validateRequest = (schema: ZodObject&lt;any&gt;) =&gt; {
+    return async (req: Request, _res: Response, next: NextFunction): Promise&lt;void&gt; =&gt; {
+    try {
+      // Valida body, query y params al mismo tiempo según el esquema provisto
+    await schema.parseAsync({
+        body: req.body,
+        query: req.query,
+        params: req.params,
+    });
+    next();
+    } catch (error) {
+      // Envía el error de Zod directamente al errorHandler global
+    next(error);
+    }
+};
+};
+</file>
+
+<file path="routes/ticket.routes.ts">
+// src/routes/ticket.routes.ts
+
+import { Router } from &apos;express&apos;;
+import { TicketController } from &apos;../controllers/ticket.controller&apos;;
+import { isAuth, hasRole } from &apos;../middleware/authMiddleware&apos;;
+import { validateRequest } from &apos;../middleware/validateRequest&apos;;
+import { createTicketSchema } from &apos;../schemas/ticket.schema&apos;;
+
+const router = Router();
+
+// ==========================================
+// MIDDLEWARE GLOBAL DEL ROUTER
+// ==========================================
+// Todas las rutas de tickets requieren que el usuario esté autenticado
+router.use(isAuth);
+
+// ==========================================
+// ENDPOINTS DE TICKETS
+// ==========================================
+
+/**
+ * @route   POST /api/tickets
+ * @desc    Crea un nuevo ticket
+ * @access  Privado (Cualquier rol autenticado puede crear un ticket)
+ */
+router.post(
+    &apos;/&apos;,
+    hasRole([&apos;CUSTOMER&apos;, &apos;AGENT&apos;, &apos;ADMIN&apos;]),
+    validateRequest(createTicketSchema),
+    TicketController.createTicket
+);
+
+/**
+ * @route   GET /api/tickets
+ * @desc    Obtiene la lista de tickets (filtrada por rol)
+ */
+router.get(
+    &apos;/&apos;,
+  hasRole([&apos;CUSTOMER&apos;, &apos;AGENT&apos;, &apos;ADMIN&apos;]), // Todos pueden entrar, el servicio filtra
+    TicketController.getTickets
+);
+
+export default router;
+</file>
+
+<file path="routes/__tests__/ticket.routes.test.ts">
+// ==========================================
+// 1. MOCKS DE PRISMA Y AUTENTICACIÓN (ANTES DE IMPORTAR APP)
+// ==========================================
+
+import { DeepMockProxy } from &apos;jest-mock-extended&apos;;
+import { PrismaClient } from &apos;@prisma/client&apos;;
+
+// Mock de Prisma usando jest-mock-extended para mantener consistencia
+jest.mock(&apos;../../config/prisma&apos;, () =&gt; {
+    const { mockDeep } = require(&apos;jest-mock-extended&apos;);
+    return {
+        prisma: mockDeep()
+    };
+});
+
+// Mock de los middlewares de autenticación
+jest.mock(&apos;../../middleware/authMiddleware&apos;, () =&gt; {
+    let mockUser: any = { id: &apos;test-user-id&apos;, role: &apos;CUSTOMER&apos; };
+    return {
+        __setMockUser: (user: any) =&gt; { mockUser = user; },
+        isAuth: (req: any, _res: any, next: any) =&gt; {
+            req.user = mockUser;
+            next();
+        },
+        hasRole: (roles: string[]) =&gt; {
+            return (req: any, res: any, next: any) =&gt; {
+                if (!req.user) {
+                    return res.status(401).json({ status: &apos;error&apos;, message: &apos;Unauthorized&apos; });
+                }
+                if (!roles.includes(req.user.role)) {
+                    return res.status(403).json({ status: &apos;error&apos;, message: &apos;Forbidden&apos; });
+                }
+                next();
+            };
+        }
+    };
+});
+
+// ==========================================
+// 2. IMPORTS
+// ==========================================
+
+import request from &apos;supertest&apos;;
+import app from &apos;../../app&apos;;
+import { prisma } from &apos;../../config/prisma&apos;;
+
+// Obtenemos el mock de Prisma tipado correctamente
+const prismaMock = prisma as DeepMockProxy&lt;PrismaClient&gt;;
+
+// Helper para cambiar el usuario en los tests
+const setMockUser = (user: { id: string; role: string }) =&gt; {
+    const authMiddleware = require(&apos;../../middleware/authMiddleware&apos;);
+    authMiddleware.__setMockUser(user);
+};
+
+// ==========================================
+// 3. TESTS
+// ==========================================
+
+describe(&apos;Ticket Routes&apos;, () =&gt; {
+    beforeEach(() =&gt; {
+        jest.clearAllMocks();
+        setMockUser({ id: &apos;test-user-id&apos;, role: &apos;CUSTOMER&apos; });
+    });
+
+    describe(&apos;POST /api/tickets&apos;, () =&gt; {
+        it(&apos;should create a ticket and return 201&apos;, async () =&gt; {
+            const mockTicket = {
+                id: &apos;ticket-1&apos;,
+                title: &apos;Integration Test Ticket&apos;,
+                description: &apos;Created via supertest&apos;,
+                status: &apos;OPEN&apos;,
+                priority: &apos;HIGH&apos;,
+                createdAt: new Date(),
+                author: { id: &apos;test-user-id&apos;, name: &apos;Test User&apos;, email: &apos;test@example.com&apos; }
+            };
+
+            prismaMock.ticket.create.mockResolvedValue(mockTicket as any);
+
+            const response = await request(app)
+                .post(&apos;/api/tickets&apos;)
+                .send({
+                    title: &apos;Integration Test Ticket&apos;,
+                    description: &apos;Created via supertest&apos;,
+                    priority: &apos;HIGH&apos;
+                });
+
+            expect(response.status).toBe(201);
+            expect(response.body.status).toBe(&apos;success&apos;);
+            expect(response.body.data.ticket).toMatchObject({
+                id: &apos;ticket-1&apos;,
+                title: &apos;Integration Test Ticket&apos;
+            });
+            expect(prismaMock.ticket.create).toHaveBeenCalled();
+        });
+
+        it(&apos;should return 400 if validation fails&apos;, async () =&gt; {
+            const response = await request(app)
+                .post(&apos;/api/tickets&apos;)
+                .send({ title: &apos;short&apos; });
+
+            expect(response.status).toBe(400);
+            expect(response.body.message).toBe(&apos;Validation failed&apos;);
+            expect(response.body.errors).toBeDefined();
+        });
+    });
+
+    describe(&apos;GET /api/tickets&apos;, () =&gt; {
+        it(&apos;should return only own tickets for CUSTOMER&apos;, async () =&gt; {
+            setMockUser({ id: &apos;cust-1&apos;, role: &apos;CUSTOMER&apos; });
+            const mockTickets = [
+                { id: &apos;1&apos;, title: &apos;My Ticket&apos;, status: &apos;OPEN&apos;, priority: &apos;LOW&apos;, createdAt: new Date(), author: { name: &apos;C&apos;, email: &apos;c@c.com&apos; } }
+            ];
+            prismaMock.ticket.findMany.mockResolvedValue(mockTickets as any);  
+            
+            const response = await request(app).get(&apos;/api/tickets&apos;);    
+            
+            expect(response.status).toBe(200);
+            expect(response.body.data.tickets).toHaveLength(1);
+            expect(prismaMock.ticket.findMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: { authorId: &apos;cust-1&apos; }
+                })
+            );
+        });
+
+        it(&apos;should return all tickets for AGENT&apos;, async () =&gt; {
+            setMockUser({ id: &apos;agent-1&apos;, role: &apos;AGENT&apos; });
+            const mockTickets = [
+                { id: &apos;1&apos;, title: &apos;Ticket 1&apos;, status: &apos;OPEN&apos;, priority: &apos;HIGH&apos;, createdAt: new Date(), author: { name: &apos;A&apos;, email: &apos;a@a.com&apos; } },
+                { id: &apos;2&apos;, title: &apos;Ticket 2&apos;, status: &apos;CLOSED&apos;, priority: &apos;LOW&apos;, createdAt: new Date(), author: { name: &apos;B&apos;, email: &apos;b@b.com&apos; } }
+            ];
+            prismaMock.ticket.findMany.mockResolvedValue(mockTickets as any);
+
+            const response = await request(app).get(&apos;/api/tickets&apos;);
+
+            expect(response.status).toBe(200);
+            expect(response.body.data.tickets).toHaveLength(2);
+            expect(prismaMock.ticket.findMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: {}
+                })
+            );
+        });
+
+        it(&apos;should return all tickets for ADMIN&apos;, async () =&gt; {
+            setMockUser({ id: &apos;admin-1&apos;, role: &apos;ADMIN&apos; });
+            prismaMock.ticket.findMany.mockResolvedValue([]);
+
+            const response = await request(app).get(&apos;/api/tickets&apos;);
+
+            expect(response.status).toBe(200);
+            expect(prismaMock.ticket.findMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: {}
+                })
+            );
+        });
+    });
+});
+</file>
+
+<file path="schemas/ticket.schema.ts">
+import { z } from &apos;zod&apos;;
+
+export const createTicketSchema = z.object({
+    body: z.object({
+    title: z.string()
+        .min(5, &apos;El título debe tener al menos 5 caracteres y es requerido&apos;)
+        .max(100, &apos;El título no puede exceder los 100 caracteres&apos;),
+    
+    description: z.string()
+        .min(10, &apos;La descripción es requerida y debe ser detallada (mínimo 10 caracteres)&apos;),
+    
+    // La prioridad sigue siendo opcional
+    priority: z.enum([&apos;LOW&apos;, &apos;MEDIUM&apos;, &apos;HIGH&apos;, &apos;URGENT&apos;]).optional(),
+}),
+});
+</file>
+
+<file path="server.ts">
+import app from &apos;./app&apos;;
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () =&gt; {
+    console.log(`Core API executing on http://localhost:${PORT}`);
+});
+</file>
+
+<file path="services/ticket.service.ts">
+import { prisma } from &apos;../config/prisma&apos;;
+import { Role, TicketPriority } from &apos;@prisma/client&apos;;
+
+interface CreateTicketDTO {
+    title: string;
+    description: string;
+    priority?: TicketPriority;
+    authorId: string;
+}
+
+export class TicketService {
+    /**
+     * Crea un nuevo ticket en el sistema
+     */
+    static async createTicket(data: CreateTicketDTO) {
+        const ticket = await prisma.ticket.create({
+            data: {
+                title: data.title,
+                description: data.description,
+                priority: data.priority,
+                authorId: data.authorId
+            },
+            select: {
+                id: true,
+                title: true,
+                status: true,
+                priority: true,
+                createdAt: true,
+                author: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true
+                    }
+                }
+            }
+        });
+        return ticket;
+    }
+
+    static async getTickets(userId: string, userRole: Role) {
+        let whereCondition = {};
+
+        if (userRole === &apos;CUSTOMER&apos;) {
+            whereCondition = { authorId: userId };
+        }
+
+        const tickets = await prisma.ticket.findMany({
+            where: whereCondition,
+            orderBy: {
+                createdAt: &apos;desc&apos;,
+            },
+            select: {
+                id: true,
+                title: true,
+                status: true,
+                priority: true,
+                createdAt: true,
+                author: {
+                    select: { name: true, email: true }
+                }
+            }
+        });
+
+        return tickets;
+    }
+}
+</file>
+
+<file path="services/__tests__/ticket.service.test.ts">
+import { TicketService } from &apos;../ticket.service&apos;;
+import { PrismaClient } from &apos;@prisma/client&apos;;
+import { DeepMockProxy } from &apos;jest-mock-extended&apos;;
+
+// Creamos el mock 
+jest.mock(&apos;../../config/prisma&apos;, () =&gt; {
+    const { mockDeep } = require(&apos;jest-mock-extended&apos;);
+    return {
+        prisma: mockDeep()
+    };
+});
+
+// Luego importamos el prisma mockeado desde el módulo
+import { prisma } from &apos;../../config/prisma&apos;;
+
+// Tipamos el mock para tener autocompletado
+const prismaMock = prisma as DeepMockProxy&lt;PrismaClient&gt;;
+
+describe(&apos;TicketService&apos;, () =&gt; {
+    beforeEach(() =&gt; {
+    jest.clearAllMocks();
+});
+
+describe(&apos;createTicket&apos;, () =&gt; {
+    it(&apos;should create a ticket successfully&apos;, async () =&gt; {
+        const mockTicket = {
+        id: &apos;ticket-123&apos;,
+        title: &apos;Test Ticket&apos;,
+        description: &apos;This is a test description&apos;,
+        status: &apos;OPEN&apos;,
+        priority: &apos;MEDIUM&apos;,
+        createdAt: new Date(),
+        author: { id: &apos;user-1&apos;, name: &apos;John&apos;, email: &apos;john@example.com&apos; }
+    };
+
+    prismaMock.ticket.create.mockResolvedValue(mockTicket as any);
+
+    const result = await TicketService.createTicket({
+        title: &apos;Test Ticket&apos;,
+        description: &apos;This is a test description&apos;,
+        priority: &apos;MEDIUM&apos;,
+        authorId: &apos;user-1&apos;
+    });
+
+    expect(prismaMock.ticket.create).toHaveBeenCalledWith({
+        data: {
+            title: &apos;Test Ticket&apos;,
+            description: &apos;This is a test description&apos;,
+            priority: &apos;MEDIUM&apos;,
+            authorId: &apos;user-1&apos;
+        },
+        select: expect.any(Object)
+    });
+    expect(result).toEqual(mockTicket);
+    });
+});
+
+describe(&apos;getTickets&apos;, () =&gt; {
+    it(&apos;should return all tickets for AGENT role&apos;, async () =&gt; {
+        const mockTickets = [
+            { id: &apos;1&apos;, title: &apos;Ticket 1&apos;, status: &apos;OPEN&apos;, priority: &apos;HIGH&apos;, createdAt: new Date(), author: { name: &apos;A&apos;, email: &apos;a@a.com&apos; } },
+            { id: &apos;2&apos;, title: &apos;Ticket 2&apos;, status: &apos;CLOSED&apos;, priority: &apos;LOW&apos;, createdAt: new Date(), author: { name: &apos;B&apos;, email: &apos;b@b.com&apos; } }
+        ];
+        prismaMock.ticket.findMany.mockResolvedValue(mockTickets as any);
+
+        const result = await TicketService.getTickets(&apos;agent-123&apos;, &apos;AGENT&apos;);
+
+        expect(prismaMock.ticket.findMany).toHaveBeenCalledWith({
+        where: {},
+        orderBy: { createdAt: &apos;desc&apos; },
+        select: expect.any(Object)
+        });
+        expect(result).toEqual(mockTickets);
+    });
+
+    it(&apos;should return only own tickets for CUSTOMER role&apos;, async () =&gt; {
+        const userId = &apos;customer-456&apos;;
+        const mockTickets = [
+        { id: &apos;1&apos;, title: &apos;My Ticket&apos;, status: &apos;OPEN&apos;, priority: &apos;HIGH&apos;, createdAt: new Date(), author: { name: &apos;C&apos;, email: &apos;c@c.com&apos; } }
+    ];
+    prismaMock.ticket.findMany.mockResolvedValue(mockTickets as any);
+
+    const result = await TicketService.getTickets(userId, &apos;CUSTOMER&apos;);
+
+    expect(prismaMock.ticket.findMany).toHaveBeenCalledWith({
+        where: { authorId: userId },
+        orderBy: { createdAt: &apos;desc&apos; },
+        select: expect.any(Object)
+    });
+    expect(result).toEqual(mockTickets);
+    });
+
+    it(&apos;should return all tickets for ADMIN role (no filter)&apos;, async () =&gt; {
+        prismaMock.ticket.findMany.mockResolvedValue([]);
+        await TicketService.getTickets(&apos;admin-789&apos;, &apos;ADMIN&apos;);
+        expect(prismaMock.ticket.findMany).toHaveBeenCalledWith({
+        where: {},
+        orderBy: { createdAt: &apos;desc&apos; },
+        select: expect.any(Object)
+    });
+    });
+});
+});
+</file>
+
+<file path="types/express/index.d.ts">
+// src/types/express/index.d.ts
+
+import { JwtPayload } from &apos;jsonwebtoken&apos;;
+
+// Asegúrate de que los roles coincidan con tu schema.prisma
+export type Role = &apos;CUSTOMER&apos; | &apos;AGENT&apos; | &apos;ADMIN&apos;;
+
+export interface TokenPayload extends JwtPayload {
+    id: string;
+    role: Role;
+}
+
+declare global {
+    namespace Express {
+    export interface Request {
+        user?: TokenPayload;
+    }
+}
+}
+</file>
+
+<file path="__tests__/app.test.ts">
+// tests/app.test.ts
+import request from &apos;supertest&apos;;
+import app from &apos;../app&apos;; // Importamos la app de Express, NO el server que escucha el puerto
+
+describe(&apos;Iniciando tests de Infraestructura&apos;, () =&gt; {
+    
+    describe(&apos;GET /health&apos;, () =&gt; {
+      it(&apos;Debería retornar status 200 y un mensaje de OK&apos;, async () =&gt; {
+        // Usamos supertest para hacer la petición a nuestra app
+        const response = await request(app).get(&apos;/health&apos;);
+
+        // Validamos el resultado
+        expect(response.status).toBe(200);
+        expect(response.body).toHaveProperty(&apos;status&apos;, &apos;OK&apos;);
+        expect(response.body).toHaveProperty(&apos;timestamp&apos;);
+        });
+    });
+
+describe(&apos;Manejo de rutas inexistentes (404)&apos;, () =&gt; {
+    it(&apos;Debería retornar un 404 para una ruta que no existe&apos;, async () =&gt; {
+        const response = await request(app).get(&apos;/api/ruta-que-no-existe&apos;);
+        
+        expect(response.status).toBe(404);
+        // Aquí validamos que tu errorHandler global esté atrapando esto y devolviendo tu formato estándar
+        expect(response.body).toHaveProperty(&apos;status&apos;, &apos;error&apos;);
+      });
+    });
+});
+</file>
+
+</repository>
