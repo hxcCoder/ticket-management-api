@@ -1,0 +1,87 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  AGENT
+  ADMIN
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         Role      @default(CUSTOMER)
+  
+  // Relaciones
+  ticketsCreated  Ticket[]  @relation("AuthorTickets")
+  ticketsAssigned Ticket[]  @relation("AssigneeTickets")
+  comments        Comment[]
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Ticket {
+  id          String         @id @default(uuid())
+  title       String
+  description String         @db.Text
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+
+  // El cliente que creó el ticket
+  authorId    String
+  author      User           @relation("AuthorTickets", fields: [authorId], references: [id])
+
+  // El agente que está resolviendo el ticket (puede ser null al inicio)
+  assigneeId  String?
+  assignee    User?          @relation("AssigneeTickets", fields: [assigneeId], references: [id])
+
+  comments    Comment[]
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Índices para optimizar las consultas por estado o prioridad (¡A los reclutadores les encanta ver esto!)
+  @@index([status])
+  @@index([authorId])
+  @@index([assigneeId])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  content   String   @db.Text
+  
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+
+  isInternal Boolean @default(false) // Si es true, el cliente no puede ver este comentario
+
+  createdAt DateTime @default(now())
+}
